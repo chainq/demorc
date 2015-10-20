@@ -1,3 +1,5 @@
 *.o
 *.ppu
 *.s
+server
+listen
