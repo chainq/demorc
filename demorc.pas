@@ -27,13 +27,41 @@ function DRC_Close(DRCSession: PDRC_Session): Boolean;
 implementation
 
 uses
-  sockets
+  sockets, ctypes
   {$IFDEF WINDOWS}
   ,winsock
   {$ELSE}
+  {$IFDEF UNIX}
   ,unix, baseunix
+  {$ELSE}
+  {$ERROR Unsupported system.}
+  {$ENDIF}
   {$ENDIF}
   ;
+
+{$IFDEF UNIX}
+// Workaround for cross-platform RTL incompatibility braindamage
+// because of function naming (r u for real?)
+function FD_ZERO(var nset: TFDSet):cint; inline;
+begin
+  FD_ZERO:=fpFD_ZERO(nset);
+end;
+
+function FD_CLR(fdno: cint; var nset: TFDSet):cint; inline;
+begin
+  FD_CLR:=fpFD_CLR(fdno,nset);
+end;
+
+function FD_SET(fdno: cint; var nset: TFDSet):cint; inline;
+begin
+  FD_SET:=fpFD_SET(fdno, nset);
+end;
+
+function FD_ISSET(fdno: cint; const nset: TFDSet):boolean; inline;
+begin
+  FD_ISSET:=fpFD_ISSET(fdno, nset) > 0;
+end;
+{$ENDIF}
 
 type
   TDRC_Session = record
@@ -65,11 +93,7 @@ begin
       if clientSockets[i] = 0 then
       begin
         clientSockets[i]:=newSocket;
-        {$IFDEF WINDOWS}
         FD_SET(newSocket, activeFdSet);
-        {$ELSE}
-        fpFD_SET(newSocket, activeFdSet);
-        {$ENDIF}
         AcceptClient:=true;
         break;
       end;
@@ -98,11 +122,7 @@ begin
     if len <= 0 then
     begin
       writeln('Server : Disconnect ');
-      {$IFDEF WINDOWS}
       FD_CLR(clientSockets[idx],activeFdSet);
-      {$ELSE}
-      fpFD_CLR(clientSockets[idx],activeFdSet);
-      {$ENDIF}
       CloseSocket(clientSockets[idx]);
       clientSockets[idx]:=0;
     end
@@ -146,13 +166,8 @@ begin
     if fpListen (listenSocket,1) = -1 then
       exit;
 
-    {$IFDEF WINDOWS}
     FD_ZERO(activeFdSet);
     FD_SET(listenSocket,activeFdSet);
-    {$ELSE}
-    fpFD_ZERO(activeFdSet);
-    fpFD_SET(listenSocket,activeFdSet);
-    {$ENDIF}
   end;
   DRC_Init:=session;
 end;
@@ -173,25 +188,18 @@ begin
       if fpSelect(maxClientSockets * 4,@readFdSet,nil,nil,0) < 0 then
       {$ENDIF}
       begin
+        // FIX ME!
         writeln('fail?');
         exit;
       end;
 
-      {$IFDEF WINDOWS}
       if FD_ISSET(listenSocket,readFdset) then
-      {$ELSE}
-      if fpFD_ISSET(listenSocket,readFdset) > 0 then
-      {$ENDIF}
         AcceptClient(TDRC_Session(DRCSession^));
 
       for i:=0 to maxClientSockets-1 do
         if ClientSockets[i] <> 0 then
         begin
-          {$IFDEF WINDOWS}
           if FD_ISSET(ClientSockets[i],readFdSet) then
-          {$ELSE}
-          if fpFD_ISSET(ClientSockets[i],readFdSet) > 0 then
-          {$ENDIF}
           begin
             ReadClient(TDRC_Session(DRCSession^),i);
           end;
