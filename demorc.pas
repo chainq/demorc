@@ -15,6 +15,9 @@
   CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 }
 
+{ Simple server-client messaging system, designed to ease tooling
+  of the development of demoscene productions written in Free Pascal }
+
 { Thanks to Attila Nagy "aha" for ideas and inspiration }
 
 {$MODE FPC}
@@ -56,7 +59,7 @@ function DRC_Close(DRCSession: PDRC_Session): Boolean;
 function DRC_AddMsgHandler(DRCSession: PDRC_Session; MsgID: Word; handler: TDRC_MsgHandler): Boolean;
 function DRC_RemoveMsgHandler(DRCSession: PDRC_Session; MsgID: Word): Boolean;
 
-function DRC_SetLogger(DRCSession: PDRC_Session; newlogger: TDRC_Logger): boolean;
+function DRC_SetLogger(DRCSession: PDRC_Session; newlogger: TDRC_Logger): Boolean;
 procedure DRC_DefaultLogger(s: PChar); cdecl;
 
 implementation
