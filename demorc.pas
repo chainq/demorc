@@ -15,8 +15,9 @@
   CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 }
 
-{ Simple server-client messaging system, designed to ease tooling
-  of the development of demoscene productions written in Free Pascal }
+{ Simple server-client messaging system, designed to ease the
+  development tooling of demoscene productions written in
+  Free Pascal }
 
 { Thanks to Attila Nagy "aha" for ideas and inspiration }
 
