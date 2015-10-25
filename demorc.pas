@@ -19,6 +19,7 @@
 
 {$MODE FPC}
 {$PACKRECORDS C}
+{$DEFINE DRC_HAS_DEFAULT_LOGGER}
 unit demorc;
 
 interface
@@ -43,18 +44,19 @@ type
   PDRC_Session = Pointer;
 
 type
-  TDRC_MsgHandler = function(length: TDRC_MsgSize; buf: Pointer): boolean;
+  TDRC_MsgHandler = function(session: PDRC_Session; buf: Pointer; var length: TDRC_MsgSize): boolean; cdecl;
+  PTDRC_MsgHandler = ^TDRC_MsgHandler;
   TDRC_Logger = procedure(s: PChar); cdecl;
 
 function DRC_Init: PDRC_Session;
-function DRC_Init(IP: String; Port: Word): PDRC_Session;
+function DRC_Init(const IP: String; Port: Word): PDRC_Session;
 function DRC_Handler(DRCSession: PDRC_Session): Boolean;
 function DRC_Close(DRCSession: PDRC_Session): Boolean;
 
 function DRC_AddMsgHandler(DRCSession: PDRC_Session; MsgID: Word; handler: TDRC_MsgHandler): Boolean;
 function DRC_RemoveMsgHandler(DRCSession: PDRC_Session; MsgID: Word): Boolean;
 
-function DRC_SetLogger(DRCSession: PDRC_Session; logger: TDRC_Logger): boolean;
+function DRC_SetLogger(DRCSession: PDRC_Session; newlogger: TDRC_Logger): boolean;
 procedure DRC_DefaultLogger(s: PChar); cdecl;
 
 implementation
@@ -104,8 +106,27 @@ type
     maxClientSockets: LongInt;
     clientSockets: PLongInt;
     clientBuffers: PPByte;
+    msgHandlers: PTDRC_MsgHandler;
+    logger: TDRC_Logger;
   end;
   PDRC_Session_Int = ^TDRC_Session;
+
+{ lets not include the entire sysutils for this... }
+function IntToStr(I : Longint) : String;
+Var S : String;
+begin
+ Str (I,S);
+ IntToStr:=S;
+end;
+
+procedure logline(var DRCSession: TDRC_Session; const s: AnsiString);
+begin
+  with DRCSession do
+  begin
+    if logger <> nil then
+      logger(PChar(s));
+  end;
+end;
 
 function AcceptClient(var DRCSession: TDRC_Session): boolean;
 var
@@ -119,7 +140,7 @@ begin
   begin
     addrSize:=sizeof(peerAddr);
     newSocket:=fpAccept(listenSocket, @peerAddr, @addrSize);
-    writeln('Server : Incoming from : ',NetAddrToStr(peerAddr.sin_addr),':',ntohs(peerAddr.sin_port));
+    logline(DRCSession,'Server : Incoming from : '+NetAddrToStr(peerAddr.sin_addr)+':'+IntToStr(ntohs(peerAddr.sin_port)));
 
     i:=0;
     while i < maxClientSockets do
@@ -131,7 +152,7 @@ begin
         FillChar(clientBuffers[i]^,high(TDRC_MsgSize),0);
         FD_SET(newSocket, activeFdSet);
         AcceptClient:=true;
-        writeln('Server : Accepted as client #',i);
+        logline(DRCSession,'Server : Accepted as client #'+IntToStr(i));
         break;
       end;
       inc(i);
@@ -139,7 +160,7 @@ begin
 
     if i >= maxClientSockets then
     begin
-      writeln('Server : Too many connections.');
+      logline(DRCSession,'Server : Too many connections. Maximum allowed is '+IntToStr(maxClientSockets));
       CloseSocket(newSocket);
     end;
   end;
@@ -152,7 +173,7 @@ begin
   begin
     if clientSockets[idx] <> 0 then
     begin
-      writeln('Server : Disconnecting client #',idx);
+      logline(DRCSession,'Server : Disconnecting client #'+IntToStr(idx));
       FD_CLR(clientSockets[idx],activeFdSet);
       CloseSocket(clientSockets[idx]);
       clientSockets[idx]:=0;
@@ -192,7 +213,7 @@ begin
   DRC_Init:=DRC_Init(DRC_DEFAULT_HOST,DRC_DEFAULT_PORT);
 end;
 
-function DRC_Init(IP: String; Port: Word): PDRC_Session;
+function DRC_Init(const IP: String; Port: Word): PDRC_Session;
 var
   session: PDRC_Session;
 begin
@@ -200,11 +221,16 @@ begin
   session:=new(PDRC_Session_Int);
   with TDRC_Session(session^) do
   begin
+{$IFDEF DRC_HAS_DEFAULT_LOGGER}
+    DRC_SetLogger(session,@DRC_DefaultLogger);
+{$ENDIF}
     maxClientSockets:=DRC_DEFAULT_MAX_CLIENTS;
     clientSockets:=GetMem(sizeof(LongInt) * DRC_DEFAULT_MAX_CLIENTS);
     clientBuffers:=GetMem(sizeof(PPByte) * DRC_DEFAULT_MAX_CLIENTS);
+    msgHandlers:=GetMem(sizeof(PTDRC_MsgHandler) * high(TDRC_MsgSize));
     FillDWord(clientSockets^,maxClientSockets,0);
     FillChar(clientBuffers^,maxClientSockets*sizeof(PPByte),0);
+    FillChar(msgHandlers^,sizeof(PTDRC_MsgHandler) * high(TDRC_MsgSize),0);
 
     listenSocket := fpSocket(AF_INET, SOCK_STREAM, 0);
     if listenSocket = -1 then
@@ -243,7 +269,7 @@ begin
       {$ENDIF}
       begin
         // FIX ME!
-        writeln('fail?');
+        logline(TDRC_Session(DRCSession^),'fail?');
         exit;
       end;
 
@@ -279,7 +305,8 @@ begin
       CloseSocket(listenSocket);
       FreeMem(clientSockets);
       FreeMem(clientBuffers);
-      FreeMem(DRCSession);
+      FreeMem(msgHandlers);
+      Dispose(PDRC_Session_Int(DRCSession));
     end;
     DRC_Close:=true;
   end;
@@ -289,16 +316,39 @@ end;
 function DRC_AddMsgHandler(DRCSession: PDRC_Session; MsgID: Word; handler: TDRC_MsgHandler): Boolean;
 begin
   DRC_AddMsgHandler:=false;
+  if DRCSession <> nil then
+  begin
+    with TDRC_Session(DRCSession^) do
+    begin
+      msgHandlers[MsgID]:=handler;
+      DRC_AddMsgHandler:=true;
+    end;
+  end;
 end;
 
 function DRC_RemoveMsgHandler(DRCSession: PDRC_Session; MsgID: Word): Boolean;
 begin
   DRC_RemoveMsgHandler:=false;
+  if DRCSession <> nil then
+  begin
+    with TDRC_Session(DRCSession^) do
+    begin
+      msgHandlers[MsgID]:=nil;
+      DRC_RemoveMsgHandler:=true;
+    end;
+  end;
 end;
 
-function DRC_SetLogger(DRCSession: PDRC_Session; logger: TDRC_Logger): boolean;
+function DRC_SetLogger(DRCSession: PDRC_Session; newlogger: TDRC_Logger): boolean;
 begin
   DRC_SetLogger:=false;
+  if DRCSession <> nil then
+  begin
+    with TDRC_Session(DRCSession^) do
+    begin
+      logger:=newlogger;
+    end;
+  end;
 end;
 
 procedure DRC_DefaultLogger(s: PChar); cdecl;
