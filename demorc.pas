@@ -42,10 +42,20 @@ type
 type
   PDRC_Session = Pointer;
 
+type
+  TDRC_MsgHandler = function(length: TDRC_MsgSize; buf: Pointer): boolean;
+  TDRC_Logger = procedure(s: PChar); cdecl;
+
 function DRC_Init: PDRC_Session;
 function DRC_Init(IP: String; Port: Word): PDRC_Session;
 function DRC_Handler(DRCSession: PDRC_Session): Boolean;
 function DRC_Close(DRCSession: PDRC_Session): Boolean;
+
+function DRC_AddMsgHandler(DRCSession: PDRC_Session; MsgID: Word; handler: TDRC_MsgHandler): Boolean;
+function DRC_RemoveMsgHandler(DRCSession: PDRC_Session; MsgID: Word): Boolean;
+
+function DRC_SetLogger(DRCSession: PDRC_Session; logger: TDRC_Logger): boolean;
+procedure DRC_DefaultLogger(s: PChar); cdecl;
 
 implementation
 
@@ -64,7 +74,7 @@ uses
 
 {$IFDEF UNIX}
 // Workaround for cross-platform RTL incompatibility braindamage
-// because of function naming (r u for real?)
+// because of function naming (R U for real?)
 function FD_ZERO(var nset: TFDSet):cint; inline;
 begin
   FD_ZERO:=fpFD_ZERO(nset);
@@ -93,6 +103,7 @@ type
     activeFdSet: TFDSet;
     maxClientSockets: LongInt;
     clientSockets: PLongInt;
+    clientBuffers: PPByte;
   end;
   PDRC_Session_Int = ^TDRC_Session;
 
@@ -116,8 +127,11 @@ begin
       if clientSockets[i] = 0 then
       begin
         clientSockets[i]:=newSocket;
+        clientBuffers[i]:=GetMem(high(TDRC_MsgSize));
+        FillChar(clientBuffers[i]^,high(TDRC_MsgSize),0);
         FD_SET(newSocket, activeFdSet);
         AcceptClient:=true;
+        writeln('Server : Accepted as client #',i);
         break;
       end;
       inc(i);
@@ -127,6 +141,24 @@ begin
     begin
       writeln('Server : Too many connections.');
       CloseSocket(newSocket);
+    end;
+  end;
+end;
+
+function CloseClient(var DRCSession: TDRC_Session; idx: LongInt): boolean;
+begin
+  CloseClient:=false;
+  with DRCSession do
+  begin
+    if clientSockets[idx] <> 0 then
+    begin
+      writeln('Server : Disconnecting client #',idx);
+      FD_CLR(clientSockets[idx],activeFdSet);
+      CloseSocket(clientSockets[idx]);
+      clientSockets[idx]:=0;
+      FreeMem(clientBuffers[idx]);
+      clientBuffers[idx]:=nil;
+      CloseClient:=true;
     end;
   end;
 end;
@@ -144,10 +176,7 @@ begin
     len:=fpRecv(ClientSockets[idx], @buffer, MAX_MSG_LEN, 0);
     if len <= 0 then
     begin
-      writeln('Server : Disconnect ');
-      FD_CLR(clientSockets[idx],activeFdSet);
-      CloseSocket(clientSockets[idx]);
-      clientSockets[idx]:=0;
+      CloseClient(DRCSession,idx)
     end
     else
     begin
@@ -173,7 +202,9 @@ begin
   begin
     maxClientSockets:=DRC_DEFAULT_MAX_CLIENTS;
     clientSockets:=GetMem(sizeof(LongInt) * DRC_DEFAULT_MAX_CLIENTS);
+    clientBuffers:=GetMem(sizeof(PPByte) * DRC_DEFAULT_MAX_CLIENTS);
     FillDWord(clientSockets^,maxClientSockets,0);
+    FillChar(clientBuffers^,maxClientSockets*sizeof(PPByte),0);
 
     listenSocket := fpSocket(AF_INET, SOCK_STREAM, 0);
     if listenSocket = -1 then
@@ -231,7 +262,48 @@ begin
 end;
 
 function DRC_Close(DRCSession: PDRC_Session): Boolean;
+var i: LongInt;
 begin
+  DRC_Close:=false;
+  if DRCSession <> nil then
+  begin
+    with TDRC_Session(DRCSession^) do
+    begin
+      for i:=0 to maxClientSockets-1 do
+      begin
+        if clientSockets[i]<>0 then
+        begin
+          CloseClient(TDRC_Session(DRCSession^),i);
+        end;
+      end;
+      CloseSocket(listenSocket);
+      FreeMem(clientSockets);
+      FreeMem(clientBuffers);
+      FreeMem(DRCSession);
+    end;
+    DRC_Close:=true;
+  end;
+end;
+
+
+function DRC_AddMsgHandler(DRCSession: PDRC_Session; MsgID: Word; handler: TDRC_MsgHandler): Boolean;
+begin
+  DRC_AddMsgHandler:=false;
+end;
+
+function DRC_RemoveMsgHandler(DRCSession: PDRC_Session; MsgID: Word): Boolean;
+begin
+  DRC_RemoveMsgHandler:=false;
+end;
+
+function DRC_SetLogger(DRCSession: PDRC_Session; logger: TDRC_Logger): boolean;
+begin
+  DRC_SetLogger:=false;
+end;
+
+procedure DRC_DefaultLogger(s: PChar); cdecl;
+begin
+  writeln(s);
 end;
 
 end.
