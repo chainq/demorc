@@ -38,7 +38,7 @@ const
   DRC_MAX_BUFFER_SIZE = high(TDRC_MsgSize);
 
 type
-  TDRC_MsgHeader = record
+  TDRC_MsgHeader = packed record
     Length: TDRC_MsgSize;
     MsgID: word;
   end;
@@ -49,7 +49,7 @@ type
 
 type
   TDRC_MsgHandler = function(session: PDRC_Session; buf: Pointer; var length: TDRC_MsgSize): boolean; cdecl;
-  PTDRC_MsgHandler = ^TDRC_MsgHandler;
+  PDRC_MsgHandler = ^TDRC_MsgHandler;
   TDRC_Logger = procedure(s: PChar); cdecl;
 
 function DRC_Init: PDRC_Session;
@@ -110,7 +110,9 @@ type
     maxClientSockets: LongInt;
     clientSockets: PLongInt;
     clientBuffers: PPByte;
-    msgHandlers: PTDRC_MsgHandler;
+    clientBuffersPos: PLongInt;
+    msgHandlers: PDRC_MsgHandler;
+    handlerBuf: PByte;
     logger: TDRC_Logger;
   end;
   PDRC_Session_Int = ^TDRC_Session;
@@ -152,8 +154,9 @@ begin
       if clientSockets[i] = 0 then
       begin
         clientSockets[i]:=newSocket;
-        clientBuffers[i]:=GetMem(high(TDRC_MsgSize));
-        FillChar(clientBuffers[i]^,high(TDRC_MsgSize),0);
+        clientBuffers[i]:=GetMem(high(TDRC_MsgSize)+sizeof(TDRC_MsgHeader));
+        clientBuffersPos[i]:=0;
+        FillChar(clientBuffers[i]^,high(TDRC_MsgSize)+sizeof(TDRC_MsgHeader),0);
         FD_SET(newSocket, activeFdSet);
         AcceptClient:=true;
         logline(DRCSession,'Server : Accepted as client #'+IntToStr(i));
@@ -188,29 +191,76 @@ begin
   end;
 end;
 
+{ returns true when we have at least 1 packet in the buffer }
 function ReadClient(var DRCSession: TDRC_Session; idx: LongInt): boolean;
-const
-  MAX_MSG_LEN = 512;
 var
-  buffer: array[0..MAX_MSG_LEN-1] of char;
   len: LongInt;
+  pos: LongInt;
 begin
   ReadClient:=false;
   with DRCSession do
   begin
-    len:=fpRecv(ClientSockets[idx], @buffer, MAX_MSG_LEN, 0);
+    pos:=clientBuffersPos[idx];
+    len:=fpRecv(ClientSockets[idx], @clientBuffers[idx][pos], sizeof(TDRC_MsgHeader)+high(TDRC_MsgSize)-pos,0);
     if len <= 0 then
     begin
-      CloseClient(DRCSession,idx)
-    end
-    else
+      CloseClient(DRCSession,idx);
+      exit;
+    end;
+    inc(pos,len);
+    clientBuffersPos[idx]:=pos;
+
+    { return true if we have at least 1 full packet available in the buffer }
+    if pos >= sizeof(TDRC_MsgHeader) then
     begin
-      buffer[len]:=#0; // zero terminate
-      write('Server: Msg : ',PChar(@buffer));
+      ReadClient:=(LEToN(PDRC_MsgHeader(@clientBuffers[idx][0])^.length) + sizeof(TDRC_MsgHeader)) >= pos;
     end;
   end;
 end;
 
+{ when this function is called, there should be at least 1 packet guaranteed in the buffer }
+function ParsePackets(var DRCSession: TDRC_Session; idx: LongInt): boolean;
+var
+  pos: LongInt;
+  max: LongInt;
+  pHeader: PDRC_MsgHeader;
+  pData: Pointer;
+  msgID: LongInt;
+  len: LongInt;
+  newLen: TDRC_MsgSize;
+  handler: TDRC_MsgHandler;
+begin
+  ParsePackets:=false;
+  with DRCSession do
+  begin
+    pos:=0;
+    max:=clientBuffersPos[idx];
+    while pos < max do
+    begin
+      pHeader:=PDRC_MsgHeader(@clientBuffers[idx][pos]);
+      pData:=@clientBuffers[idx][pos+sizeof(TDRC_MsgHeader)];
+      len:=LEToN(pHeader^.Length);
+      msgID:=LEToN(pHeader^.MsgID);
+
+      { if the message handler wasn't nil, copy the buffer over and call the handler function }
+      if msgHandlers[msgID] <> nil then
+      begin
+        handler:=msgHandlers[msgID];
+        Move(pData^,handlerBuf^,len);
+        newLen:=len;
+        if handler(@DRCSession,handlerBuf,newLen) then
+        begin
+          // TODO: call reply code!
+        end;
+      end
+      else
+      begin
+        logline(DRCSession,'Server : Unknown Message with ID: '+HexStr(msgID,4)+' length: '+IntToStr(len)+' from client #'+IntToStr(idx));
+      end;
+      inc(pos,len+sizeof(TDRC_MsgHeader));
+    end;
+  end;
+end;
 
 function DRC_Init: PDRC_Session;
 begin
@@ -231,10 +281,12 @@ begin
     maxClientSockets:=DRC_DEFAULT_MAX_CLIENTS;
     clientSockets:=GetMem(sizeof(LongInt) * DRC_DEFAULT_MAX_CLIENTS);
     clientBuffers:=GetMem(sizeof(PPByte) * DRC_DEFAULT_MAX_CLIENTS);
-    msgHandlers:=GetMem(sizeof(PTDRC_MsgHandler) * high(TDRC_MsgSize));
+    clientBuffersPos:=GetMem(sizeof(LongInt) * DRC_DEFAULT_MAX_CLIENTS);
+    msgHandlers:=GetMem(sizeof(PDRC_MsgHandler) * high(TDRC_MsgSize));
     FillDWord(clientSockets^,maxClientSockets,0);
     FillChar(clientBuffers^,maxClientSockets*sizeof(PPByte),0);
-    FillChar(msgHandlers^,sizeof(PTDRC_MsgHandler) * high(TDRC_MsgSize),0);
+    FillDWord(clientBuffersPos^,maxClientSockets,0);
+    FillChar(msgHandlers^,sizeof(PDRC_MsgHandler) * high(TDRC_MsgSize),0);
 
     listenSocket := fpSocket(AF_INET, SOCK_STREAM, 0);
     if listenSocket = -1 then
@@ -285,7 +337,8 @@ begin
         begin
           if FD_ISSET(ClientSockets[i],readFdSet) then
           begin
-            ReadClient(TDRC_Session(DRCSession^),i);
+            if ReadClient(TDRC_Session(DRCSession^),i) then
+              ParsePackets(TDRC_Session(DRCSession^),i);
           end;
         end;
     end;
@@ -309,6 +362,7 @@ begin
       CloseSocket(listenSocket);
       FreeMem(clientSockets);
       FreeMem(clientBuffers);
+      FreeMem(clientBuffersPos);
       FreeMem(msgHandlers);
       Dispose(PDRC_Session_Int(DRCSession));
     end;
