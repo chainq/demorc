@@ -312,6 +312,7 @@ function DRC_Handler(DRCSession: PDRC_Session): Boolean;
 var
   readFdSet: TFDSet;
   i: LongInt;
+  TV : TimeVal;
 begin
   DRC_Handler:=false;
   if DRCSession <> nil then
@@ -319,7 +320,9 @@ begin
     begin
       readFdSet:=activeFdSet;
       {$IFDEF WINDOWS}
-      if select(0,@readFdSet,nil,nil,nil) < 0 then
+      TV.tv_sec  := 0;
+      TV.tv_usec := 0;
+      if select(0,@readFdSet,nil,nil,@TV) < 0 then
       {$ELSE}
       if fpSelect(maxClientSockets * 4,@readFdSet,nil,nil,0) < 0 then
       {$ENDIF}
