@@ -229,18 +229,26 @@ var
   len: LongInt;
   newLen: TDRC_MsgSize;
   handler: TDRC_MsgHandler;
+  cnt: LongInt;
 begin
+  cnt:=0;
   ParsePackets:=false;
   with DRCSession do
   begin
     pos:=0;
     max:=clientBuffersPos[idx];
-    while pos < max do
+
+    { make sure we have at least a full header to parse }
+    while (max-pos) >= 4 do
     begin
       pHeader:=PDRC_MsgHeader(@clientBuffers[idx][pos]);
       pData:=@clientBuffers[idx][pos+sizeof(TDRC_MsgHeader)];
       len:=LEToN(pHeader^.Length);
       msgID:=LEToN(pHeader^.MsgID);
+
+      { if we don't have a full package to parse, abort }
+      if max-(pos+4) < len then
+        break;
 
       { if the message handler wasn't nil, copy the buffer over and call the handler function }
       if msgHandlers[msgID] <> nil then
@@ -258,7 +266,15 @@ begin
         logline(DRCSession,'Server : Unknown Message with ID: '+HexStr(msgID,4)+' length: '+IntToStr(len)+' from client #'+IntToStr(idx));
       end;
       inc(pos,len+sizeof(TDRC_MsgHeader));
+      inc(cnt);
     end;
+
+    if (pos > 0) and (pos <> max) then
+    begin
+      Move(clientBuffers[idx][pos],clientBuffers[idx][0],pos-max);
+    end;
+    clientBuffersPos[idx]:=max-pos;
+    //logline(DRCSession,'Server : Parsed '+IntToStr(cnt)+' packets, remaining bytes: '+IntToStr(max-pos));
   end;
 end;
 
@@ -312,7 +328,9 @@ function DRC_Handler(DRCSession: PDRC_Session): Boolean;
 var
   readFdSet: TFDSet;
   i: LongInt;
+{$IFDEF WINDOWS}
   TV : TimeVal;
+{$ENDIF}
 begin
   DRC_Handler:=false;
   if DRCSession <> nil then
