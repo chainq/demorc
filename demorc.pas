@@ -299,6 +299,8 @@ begin
     clientBuffers:=GetMem(sizeof(PPByte) * DRC_DEFAULT_MAX_CLIENTS);
     clientBuffersPos:=GetMem(sizeof(LongInt) * DRC_DEFAULT_MAX_CLIENTS);
     msgHandlers:=GetMem(sizeof(PDRC_MsgHandler) * high(TDRC_MsgSize));
+    handlerBuf:=GetMem(DRC_MAX_BUFFER_SIZE);
+
     FillDWord(clientSockets^,maxClientSockets,0);
     FillChar(clientBuffers^,maxClientSockets*sizeof(PPByte),0);
     FillDWord(clientBuffersPos^,maxClientSockets,0);
@@ -385,6 +387,7 @@ begin
       FreeMem(clientBuffers);
       FreeMem(clientBuffersPos);
       FreeMem(msgHandlers);
+      FreeMem(handlerBuf);
       Dispose(PDRC_Session_Int(DRCSession));
     end;
     DRC_Close:=true;
