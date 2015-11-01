@@ -213,7 +213,7 @@ begin
     { return true if we have at least 1 full packet available in the buffer }
     if pos >= sizeof(TDRC_MsgHeader) then
     begin
-      ReadClient:=(LEToN(PDRC_MsgHeader(@clientBuffers[idx][0])^.length) + sizeof(TDRC_MsgHeader)) >= pos;
+      ReadClient:=(LEToN(PDRC_MsgHeader(@clientBuffers[idx][0])^.length) + sizeof(TDRC_MsgHeader)) <= pos;
     end;
   end;
 end;
